@@ -32,7 +32,11 @@ object BeaconParser {
 
         val ibeacon = parseIBeacon(record)
         if (ibeacon != null) {
-            val id = "ibeacon:${ibeacon.uuid}-${ibeacon.major}-${ibeacon.minor}"
+            // ESPresense's own firmware/companion publish and match iBeacon fingerprints with a
+            // capital "iBeacon:" prefix (e.g. "iBeacon:<uuid>-<major>-<minor>") - matching that
+            // exactly (case-sensitive) is required for resolveDevice()'s lookup against configs
+            // learned from other nodes (e.g. other ESPresense rooms broadcasting as iBeacons).
+            val id = "iBeacon:${ibeacon.uuid}-${ibeacon.major}-${ibeacon.minor}"
             return DetectedBeacon(
                 id = id,
                 mac = mac,

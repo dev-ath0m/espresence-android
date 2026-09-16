@@ -1,6 +1,7 @@
 package dev.espresense.node
 
 import android.util.Log
+import java.util.concurrent.ConcurrentHashMap
 import org.eclipse.paho.client.mqttv3.IMqttActionListener
 import org.eclipse.paho.client.mqttv3.IMqttAsyncClient
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
@@ -11,6 +12,9 @@ import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import org.json.JSONObject
+
+/** Enrollment for a known/mapped device, keyed by its raw fingerprint (e.g. "mac:aa:bb:..."). */
+data class DeviceConfig(val id: String, val name: String?)
 
 /**
  * Publishes to MQTT using the same topic layout as ESPresense / ESPresense-Pi, so this
@@ -23,6 +27,13 @@ import org.json.JSONObject
  *   espresense/rooms/<room>/<setting>/set       write a setting live
  *   espresense/rooms/ANY_ROOM/<setting>/set     fleet-wide write (room segment "*", also honored)
  *   espresense/devices/<id>/<room>              per-device JSON: id, distance, rssi, mac, name
+ *   espresense/settings/<fingerprint>/config    retained enrollment: {"id":..,"name":..} - maps a raw
+ *                                                 fingerprint (mac:.., ibeacon:.., irk:.., name:..) to a
+ *                                                 friendly id/name, the same way real ESPresense nodes
+ *                                                 resolve enrolled devices (see espresense.com/guides/
+ *                                                 enrolling-devices). We can't capture IRKs like the ESP32
+ *                                                 firmware does, but we honor any mapping already published
+ *                                                 by the companion/another node for MAC- or iBeacon-based ids.
  */
 class MqttPublisher(
     private val prefs: Prefs,
@@ -30,6 +41,7 @@ class MqttPublisher(
 ) {
     private var client: IMqttAsyncClient? = null
     private val room get() = prefs.room
+    private val deviceConfigs = ConcurrentHashMap<String, DeviceConfig>()
 
     val isConnected: Boolean get() = client?.isConnected == true
 
@@ -84,7 +96,10 @@ class MqttPublisher(
     private fun onConnected() {
         val c = client ?: return
         try {
-            c.subscribe(arrayOf("espresense/rooms/$room/+/set", "espresense/rooms/*/+/set"), intArrayOf(1, 1))
+            c.subscribe(
+                arrayOf("espresense/rooms/$room/+/set", "espresense/rooms/*/+/set", "espresense/settings/+/config"),
+                intArrayOf(1, 1, 1)
+            )
 
             publishRetained("espresense/rooms/$room/status", "online")
             publishRetained("espresense/rooms/$room/name", room)
@@ -113,8 +128,8 @@ class MqttPublisher(
 
     private fun handleIncoming(topic: String?, message: MqttMessage?) {
         if (topic == null || message == null) return
-        // espresense/rooms/<room-or-*>/<setting>/set
         val parts = topic.split("/")
+        // espresense/rooms/<room-or-*>/<setting>/set
         if (parts.size == 5 && parts[0] == "espresense" && parts[1] == "rooms" && parts[4] == "set") {
             val targetRoom = parts[2]
             if (targetRoom != room && targetRoom != "*") return
@@ -122,22 +137,49 @@ class MqttPublisher(
             val value = String(message.payload)
             onSettingChanged(setting, value)
             publishRetained("espresense/rooms/$room/$setting", value)
+            return
+        }
+        // espresense/settings/<fingerprint>/config - enrolled device id/name mapping (retained by companion/nodes)
+        if (parts.size == 4 && parts[0] == "espresense" && parts[1] == "settings" && parts[3] == "config") {
+            val fingerprint = parts[2]
+            val payload = String(message.payload)
+            if (payload.isBlank()) {
+                deviceConfigs.remove(fingerprint)
+                return
+            }
+            try {
+                val obj = JSONObject(payload)
+                val id = obj.optString("id").ifBlank { fingerprint }
+                val name = obj.optString("name").ifBlank { null }
+                deviceConfigs[fingerprint] = DeviceConfig(id, name)
+            } catch (e: Exception) {
+                Log.w(TAG, "Invalid device config for $fingerprint: $payload", e)
+            }
         }
     }
+
+    /** Looks up an enrolled id/name mapping for a raw fingerprint (e.g. "mac:aa:bb:..."), if any. */
+    fun resolveDevice(rawId: String): DeviceConfig? = deviceConfigs[rawId]
+
+    /** Snapshot of every enrolled device mapping learned from the broker so far (for diagnostics/UI). */
+    fun allDeviceConfigs(): Map<String, DeviceConfig> = deviceConfigs.toMap()
 
     fun publishDevice(beacon: DetectedBeacon, distance: Double) {
         val c = client ?: return
         if (!c.isConnected) return
+        val config = deviceConfigs[beacon.id]
+        val effectiveId = config?.id ?: beacon.id
+        val effectiveName = config?.name ?: beacon.name
         val json = JSONObject().apply {
-            put("id", beacon.id)
+            put("id", effectiveId)
             put("distance", distance)
             put("rssi", beacon.rssi)
             put("mac", beacon.mac)
-            if (beacon.name != null) put("name", beacon.name)
+            if (effectiveName != null) put("name", effectiveName)
         }
         try {
             val msg = MqttMessage(json.toString().toByteArray()).apply { qos = 0; isRetained = false }
-            c.publish("espresense/devices/${beacon.id}/$room", msg)
+            c.publish("espresense/devices/$effectiveId/$room", msg)
         } catch (e: Exception) {
             Log.w(TAG, "publishDevice failed", e)
         }
