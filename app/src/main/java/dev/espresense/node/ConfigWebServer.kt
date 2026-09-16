@@ -13,8 +13,10 @@ import kotlin.concurrent.thread
 /** A single currently-visible BLE/iBeacon device, as shown in the local web UI. */
 data class LiveDeviceInfo(
     val id: String,
+    val fingerprint: String,
     val mac: String,
     val name: String?,
+    val calRssi: Int?,
     val rssi: Int,
     val distance: Double,
     val ageSeconds: Long
@@ -36,7 +38,8 @@ class ConfigWebServer(
     private val isMqttConnected: () -> Boolean,
     private val getDevices: () -> List<LiveDeviceInfo>,
     private val getKnownConfigs: () -> Map<String, DeviceConfig>,
-    private val onSettingsSaved: (mqttSettingsChanged: Boolean) -> Unit
+    private val onSettingsSaved: (mqttSettingsChanged: Boolean) -> Unit,
+    private val publishDeviceConfig: (fingerprint: String, id: String?, name: String?, calRssi: Int?) -> Unit
 ) {
     @Volatile private var running = false
     private var serverSocket: ServerSocket? = null
@@ -113,6 +116,10 @@ class ConfigWebServer(
                         onSettingsSaved(restartNeeded)
                         respondRedirect(output, "/")
                     }
+                    method == "POST" && path == "/set_cal_rssi" -> {
+                        applyCalRssi(parseForm(body))
+                        respondRedirect(output, "/")
+                    }
                     method == "GET" && path == "/json" -> respond(output, 200, "application/json; charset=utf-8", renderJson())
                     else -> respond(output, 404, "text/plain; charset=utf-8", "Not found")
                 }
@@ -157,6 +164,20 @@ class ConfigWebServer(
             oldPass != prefs.mqttPass || oldTls != prefs.mqttTls || oldRoom != prefs.room
     }
 
+    /**
+     * Publishes an rssi@1m calibration (or id/name alias) for a device fingerprint to the
+     * shared MQTT config topic, so it takes effect here and on every other ESPresense node.
+     * A blank "cal_rssi" clears the calibration (falls back to broadcast power / ref_rssi).
+     */
+    private fun applyCalRssi(params: Map<String, String>) {
+        val fingerprint = params["fingerprint"]?.trim().orEmpty()
+        if (fingerprint.isBlank()) return
+        val id = params["id"]?.trim()
+        val name = params["name"]?.trim()
+        val calRssi = params["cal_rssi"]?.trim()?.toIntOrNull()
+        publishDeviceConfig(fingerprint, id, name, calRssi)
+    }
+
     private fun respond(output: OutputStream, status: Int, contentType: String, body: String) {
         val statusText = when (status) { 200 -> "OK"; 404 -> "Not Found"; else -> "Error" }
         val bytes = body.toByteArray(StandardCharsets.UTF_8)
@@ -181,15 +202,28 @@ class ConfigWebServer(
     private fun esc(s: String?): String =
         (s ?: "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
+    /** A tiny inline form to set/clear a device's shared rssi@1m calibration. */
+    private fun calRssiForm(fingerprint: String, id: String, name: String?, calRssi: Int?): String {
+        return "<form method=\"post\" action=\"/set_cal_rssi\" style=\"display:flex;gap:4px\">" +
+            "<input type=\"hidden\" name=\"fingerprint\" value=\"${esc(fingerprint)}\">" +
+            "<input type=\"hidden\" name=\"id\" value=\"${esc(id)}\">" +
+            "<input type=\"hidden\" name=\"name\" value=\"${esc(name)}\">" +
+            "<input type=\"number\" name=\"cal_rssi\" value=\"${calRssi ?: ""}\" placeholder=\"dBm\" style=\"width:70px\">" +
+            "<button type=\"submit\" style=\"margin:0;padding:4px 8px;font-size:0.85em\">Set</button>" +
+            "</form>"
+    }
+
     private fun renderJson(): String {
         val devices = getDevices().joinToString(",") { d ->
-            "{\"id\":\"${esc(d.id)}\",\"mac\":\"${esc(d.mac)}\"," +
+            "{\"id\":\"${esc(d.id)}\",\"fingerprint\":\"${esc(d.fingerprint)}\",\"mac\":\"${esc(d.mac)}\"," +
                 "\"name\":${if (d.name != null) "\"${esc(d.name)}\"" else "null"}," +
+                "\"calRssi\":${d.calRssi ?: "null"}," +
                 "\"rssi\":${d.rssi},\"distance\":${d.distance},\"ageSeconds\":${d.ageSeconds}}"
         }
         val knownConfigs = getKnownConfigs().entries.joinToString(",") { (fingerprint, cfg) ->
             "{\"fingerprint\":\"${esc(fingerprint)}\",\"id\":\"${esc(cfg.id)}\"," +
-                "\"name\":${if (cfg.name != null) "\"${esc(cfg.name)}\"" else "null"}}"
+                "\"name\":${if (cfg.name != null) "\"${esc(cfg.name)}\"" else "null"}," +
+                "\"calRssi\":${cfg.calRssi ?: "null"}}"
         }
         return "{\"room\":\"${esc(prefs.room)}\",\"mqttConnected\":${isMqttConnected()},\"devices\":[$devices]," +
             "\"knownConfigs\":[$knownConfigs]}"
@@ -201,20 +235,21 @@ class ConfigWebServer(
         val statusText = if (connected) "connected" else "disconnected"
         val devices = getDevices().sortedBy { it.distance }
         val rows = if (devices.isEmpty()) {
-            "<tr><td colspan=\"5\" style=\"text-align:center;color:#888\">No devices seen yet</td></tr>"
+            "<tr><td colspan=\"6\" style=\"text-align:center;color:#888\">No devices seen yet</td></tr>"
         } else {
             devices.joinToString("\n") { d ->
                 "<tr><td>${esc(d.id)}</td><td>${esc(d.name ?: "")}</td><td>${"%.2f".format(d.distance)} m</td>" +
-                    "<td>${d.rssi} dBm</td><td>${d.ageSeconds}s ago</td></tr>"
+                    "<td>${d.rssi} dBm</td><td>${d.ageSeconds}s ago</td><td>${calRssiForm(d.fingerprint, d.id, d.name, d.calRssi)}</td></tr>"
             }
         }
 
         val knownConfigs = getKnownConfigs().entries.sortedBy { it.value.id }
         val knownConfigRows = if (knownConfigs.isEmpty()) {
-            "<tr><td colspan=\"3\" style=\"text-align:center;color:#888\">No shared device configs learned yet</td></tr>"
+            "<tr><td colspan=\"4\" style=\"text-align:center;color:#888\">No shared device configs learned yet</td></tr>"
         } else {
             knownConfigs.joinToString("\n") { (fingerprint, cfg) ->
-                "<tr><td>${esc(cfg.id)}</td><td>${esc(fingerprint)}</td><td>${esc(cfg.name ?: "")}</td></tr>"
+                "<tr><td>${esc(cfg.id)}</td><td>${esc(fingerprint)}</td><td>${esc(cfg.name ?: "")}</td>" +
+                    "<td>${calRssiForm(fingerprint, cfg.id, cfg.name, cfg.calRssi)}</td></tr>"
             }
         }
 
@@ -266,13 +301,13 @@ fieldset{border:1px solid #ddd;border-radius:6px;margin-top:16px}
 
 <h2>Currently seen devices</h2>
 <table>
-<tr><th>Id</th><th>Name</th><th>Distance</th><th>RSSI</th><th>Last seen</th></tr>
+<tr><th>Id</th><th>Name</th><th>Distance</th><th>RSSI</th><th>Last seen</th><th>rssi@1m</th></tr>
 $rows
 </table>
 
 <h2>Known device configs (shared via MQTT)</h2>
 <table>
-<tr><th>Id</th><th>Fingerprint</th><th>Name</th></tr>
+<tr><th>Id</th><th>Fingerprint</th><th>Name</th><th>rssi@1m</th></tr>
 $knownConfigRows
 </table>
 <p style="margin-top:2em;color:#999;font-size:0.8em">ESPresense Node for Android &middot; <a href="/json">JSON status</a></p>
