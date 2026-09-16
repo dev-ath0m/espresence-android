@@ -79,7 +79,8 @@ class ScannerService : Service() {
             isMqttConnected = { mqtt?.isConnected == true },
             getDevices = { snapshotLiveDevices() },
             getKnownConfigs = { mqtt?.allDeviceConfigs() ?: emptyMap() },
-            onSettingsSaved = { mqttSettingsChanged -> if (mqttSettingsChanged) reconnectMqtt() }
+            onSettingsSaved = { mqttSettingsChanged -> if (mqttSettingsChanged) reconnectMqtt() },
+            publishDeviceConfig = { fingerprint, id, name, calRssi -> mqtt?.publishDeviceConfig(fingerprint, id, name, calRssi) }
         )
         webServer?.start()
 
@@ -94,8 +95,10 @@ class ScannerService : Service() {
             val config = mqtt?.resolveDevice(st.beacon.id)
             LiveDeviceInfo(
                 id = config?.id ?: st.beacon.id,
+                fingerprint = st.beacon.id,
                 mac = st.beacon.mac,
                 name = config?.name ?: st.beacon.name,
+                calRssi = config?.calRssi,
                 rssi = st.beacon.rssi,
                 distance = st.distance,
                 ageSeconds = (now - st.lastSeenElapsed) / 1000
@@ -166,7 +169,11 @@ class ScannerService : Service() {
 
         if (!beacon.isIBeacon && !prefs.includeGenericDevices && !beacon.id.startsWith("irk:")) return
 
-        val refRssi = beacon.measuredPower ?: prefs.refRssi
+        // A per-device rssi@1m calibration shared via MQTT config sync (from this node or any
+        // other) takes priority over the iBeacon's own broadcast power or this node's local
+        // fallback, matching real ESPresense's DeviceConfig.calRssi behavior.
+        val calRssi = mqtt?.resolveDevice(beacon.id)?.calRssi
+        val refRssi = calRssi ?: beacon.measuredPower ?: prefs.refRssi
         val distance = DistanceCalculator.estimate(beacon.rssi, refRssi, prefs.absorption)
         if (distance < 0) return
 

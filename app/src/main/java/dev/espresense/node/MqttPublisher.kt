@@ -14,7 +14,7 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import org.json.JSONObject
 
 /** Enrollment for a known/mapped device, keyed by its raw fingerprint (e.g. "mac:aa:bb:..."). */
-data class DeviceConfig(val id: String, val name: String?)
+data class DeviceConfig(val id: String, val name: String?, val calRssi: Int? = null)
 
 /**
  * Publishes to MQTT using the same topic layout as ESPresense / ESPresense-Pi, so this
@@ -27,13 +27,16 @@ data class DeviceConfig(val id: String, val name: String?)
  *   espresense/rooms/<room>/<setting>/set       write a setting live
  *   espresense/rooms/ANY_ROOM/<setting>/set     fleet-wide write (room segment "*", also honored)
  *   espresense/devices/<id>/<room>              per-device JSON: id, distance, rssi, mac, name
- *   espresense/settings/<fingerprint>/config    retained enrollment: {"id":..,"name":..} - maps a raw
- *                                                 fingerprint (mac:.., ibeacon:.., irk:.., name:..) to a
- *                                                 friendly id/name, the same way real ESPresense nodes
- *                                                 resolve enrolled devices (see espresense.com/guides/
+ *   espresense/settings/<fingerprint>/config    retained enrollment: {"id":..,"name":..,"rssi@1m":..} -
+ *                                                 maps a raw fingerprint (mac:.., iBeacon:.., irk:.., name:..)
+ *                                                 to a friendly id/name and optional per-device RSSI@1m
+ *                                                 calibration, the same way real ESPresense nodes resolve
+ *                                                 enrolled devices (see espresense.com/guides/
  *                                                 enrolling-devices). We can't capture IRKs like the ESP32
  *                                                 firmware does, but we honor any mapping already published
- *                                                 by the companion/another node for MAC- or iBeacon-based ids.
+ *                                                 by the companion/another node for MAC- or iBeacon-based ids,
+ *                                                 and can publish our own mapping/calibration too so it's
+ *                                                 shared to every other node.
  */
 class MqttPublisher(
     private val prefs: Prefs,
@@ -151,7 +154,8 @@ class MqttPublisher(
                 val obj = JSONObject(payload)
                 val id = obj.optString("id").ifBlank { fingerprint }
                 val name = obj.optString("name").ifBlank { null }
-                deviceConfigs[fingerprint] = DeviceConfig(id, name)
+                val calRssi = if (obj.has("rssi@1m") && !obj.isNull("rssi@1m")) obj.optInt("rssi@1m") else null
+                deviceConfigs[fingerprint] = DeviceConfig(id, name, calRssi)
             } catch (e: Exception) {
                 Log.w(TAG, "Invalid device config for $fingerprint: $payload", e)
             }
@@ -163,6 +167,21 @@ class MqttPublisher(
 
     /** Snapshot of every enrolled device mapping learned from the broker so far (for diagnostics/UI). */
     fun allDeviceConfigs(): Map<String, DeviceConfig> = deviceConfigs.toMap()
+
+    /**
+     * Publishes (or updates) a device's calibration/enrollment mapping to the shared
+     * "espresense/settings/<fingerprint>/config" topic (retained), so it takes effect
+     * on this node immediately and is picked up by every other ESPresense node too -
+     * the same "rssi@1m" convention as real ESPresense firmware's DeviceConfig.calRssi.
+     */
+    fun publishDeviceConfig(fingerprint: String, id: String?, name: String?, calRssi: Int?) {
+        val json = JSONObject().apply {
+            if (!id.isNullOrBlank()) put("id", id)
+            if (!name.isNullOrBlank()) put("name", name)
+            if (calRssi != null) put("rssi@1m", calRssi)
+        }
+        publishRetained("espresense/settings/$fingerprint/config", json.toString())
+    }
 
     fun publishDevice(beacon: DetectedBeacon, distance: Double) {
         val c = client ?: return
