@@ -78,6 +78,7 @@ class ScannerService : Service() {
             prefs = prefs,
             isMqttConnected = { mqtt?.isConnected == true },
             getDevices = { snapshotLiveDevices() },
+            getKnownConfigs = { mqtt?.allDeviceConfigs() ?: emptyMap() },
             onSettingsSaved = { mqttSettingsChanged -> if (mqttSettingsChanged) reconnectMqtt() }
         )
         webServer?.start()
@@ -90,10 +91,11 @@ class ScannerService : Service() {
     private fun snapshotLiveDevices(): List<LiveDeviceInfo> {
         val now = SystemClock.elapsedRealtime()
         return liveDevices.values.map { st ->
+            val config = mqtt?.resolveDevice(st.beacon.id)
             LiveDeviceInfo(
-                id = st.beacon.id,
+                id = config?.id ?: st.beacon.id,
                 mac = st.beacon.mac,
-                name = st.beacon.name,
+                name = config?.name ?: st.beacon.name,
                 rssi = st.beacon.rssi,
                 distance = st.distance,
                 ageSeconds = (now - st.lastSeenElapsed) / 1000
@@ -145,13 +147,24 @@ class ScannerService : Service() {
     }
 
     private fun handleResult(result: ScanResult) {
-        val beacon = try {
+        val parsed = try {
             BeaconParser.parse(result)
         } catch (e: SecurityException) {
             null
         } ?: return
 
-        if (!beacon.isIBeacon && !prefs.includeGenericDevices) return
+        // If this isn't an iBeacon, check whether its (rotating) MAC resolves against a
+        // known IRK enrollment learned via MQTT (e.g. a phone enrolled on another node) -
+        // this lets us recognize the device by its stable enrolled id despite the MAC churn.
+        val beacon = if (!parsed.isIBeacon) {
+            val irkFingerprints = mqtt?.allDeviceConfigs()?.keys.orEmpty()
+            val resolved = IrkResolver.tryResolve(parsed.mac, irkFingerprints)
+            if (resolved != null) parsed.copy(id = resolved) else parsed
+        } else {
+            parsed
+        }
+
+        if (!beacon.isIBeacon && !prefs.includeGenericDevices && !beacon.id.startsWith("irk:")) return
 
         val refRssi = beacon.measuredPower ?: prefs.refRssi
         val distance = DistanceCalculator.estimate(beacon.rssi, refRssi, prefs.absorption)
@@ -166,6 +179,7 @@ class ScannerService : Service() {
         val shouldPublish = previous == null ||
             (now - previous.first) >= prefs.skipMs ||
             kotlin.math.abs(distance - previous.second) >= prefs.skipDistance
+
 
         if (!shouldPublish) return
 

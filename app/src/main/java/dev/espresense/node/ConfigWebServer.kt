@@ -35,6 +35,7 @@ class ConfigWebServer(
     private val prefs: Prefs,
     private val isMqttConnected: () -> Boolean,
     private val getDevices: () -> List<LiveDeviceInfo>,
+    private val getKnownConfigs: () -> Map<String, DeviceConfig>,
     private val onSettingsSaved: (mqttSettingsChanged: Boolean) -> Unit
 ) {
     @Volatile private var running = false
@@ -186,7 +187,12 @@ class ConfigWebServer(
                 "\"name\":${if (d.name != null) "\"${esc(d.name)}\"" else "null"}," +
                 "\"rssi\":${d.rssi},\"distance\":${d.distance},\"ageSeconds\":${d.ageSeconds}}"
         }
-        return "{\"room\":\"${esc(prefs.room)}\",\"mqttConnected\":${isMqttConnected()},\"devices\":[$devices]}"
+        val knownConfigs = getKnownConfigs().entries.joinToString(",") { (fingerprint, cfg) ->
+            "{\"fingerprint\":\"${esc(fingerprint)}\",\"id\":\"${esc(cfg.id)}\"," +
+                "\"name\":${if (cfg.name != null) "\"${esc(cfg.name)}\"" else "null"}}"
+        }
+        return "{\"room\":\"${esc(prefs.room)}\",\"mqttConnected\":${isMqttConnected()},\"devices\":[$devices]," +
+            "\"knownConfigs\":[$knownConfigs]}"
     }
 
     private fun renderIndex(): String {
@@ -200,6 +206,15 @@ class ConfigWebServer(
             devices.joinToString("\n") { d ->
                 "<tr><td>${esc(d.id)}</td><td>${esc(d.name ?: "")}</td><td>${"%.2f".format(d.distance)} m</td>" +
                     "<td>${d.rssi} dBm</td><td>${d.ageSeconds}s ago</td></tr>"
+            }
+        }
+
+        val knownConfigs = getKnownConfigs().entries.sortedBy { it.value.id }
+        val knownConfigRows = if (knownConfigs.isEmpty()) {
+            "<tr><td colspan=\"3\" style=\"text-align:center;color:#888\">No shared device configs learned yet</td></tr>"
+        } else {
+            knownConfigs.joinToString("\n") { (fingerprint, cfg) ->
+                "<tr><td>${esc(cfg.id)}</td><td>${esc(fingerprint)}</td><td>${esc(cfg.name ?: "")}</td></tr>"
             }
         }
 
@@ -253,6 +268,12 @@ fieldset{border:1px solid #ddd;border-radius:6px;margin-top:16px}
 <table>
 <tr><th>Id</th><th>Name</th><th>Distance</th><th>RSSI</th><th>Last seen</th></tr>
 $rows
+</table>
+
+<h2>Known device configs (shared via MQTT)</h2>
+<table>
+<tr><th>Id</th><th>Fingerprint</th><th>Name</th></tr>
+$knownConfigRows
 </table>
 <p style="margin-top:2em;color:#999;font-size:0.8em">ESPresense Node for Android &middot; <a href="/json">JSON status</a></p>
 </body></html>
