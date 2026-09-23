@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
                             prefs.serviceEnabled = true
                             ScannerService.start(this)
                         },
+                        onSettingsSaved = { ScannerService.settingsChanged(this) },
                         onStop = {
                             prefs.serviceEnabled = false
                             ScannerService.stop(this)
@@ -120,6 +121,7 @@ fun SettingsScreen(
     onRequestPermissions: () -> Unit,
     onRequestBatteryExemption: () -> Unit,
     onStart: () -> Unit,
+    onSettingsSaved: () -> Unit,
     onStop: () -> Unit,
     onOpenWebUi: () -> Unit
 ) {
@@ -162,6 +164,9 @@ fun SettingsScreen(
         prefs.maxDistance = maxDistance.toFloatOrNull() ?: 16.0f
         prefs.includeGenericDevices = includeGeneric
         prefs.discoveryEnabled = discovery
+        // Prefs alone do not reach a running service; tell it to reconnect so a
+        // changed broker or room takes effect (and the old room gets cleaned up).
+        onSettingsSaved()
     }
 
     Column(

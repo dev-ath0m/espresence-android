@@ -43,13 +43,29 @@ class MqttPublisher(
     private val onSettingChanged: (setting: String, value: String) -> Unit
 ) {
     private var client: IMqttAsyncClient? = null
-    private val room get() = prefs.room
+
+    /**
+     * The room this connection belongs to - a snapshot of [Prefs.room] taken when
+     * [connect] runs, deliberately NOT a live read of prefs.
+     *
+     * Renaming the room writes prefs first and reconnects afterwards. With a live
+     * getter every cleanup publish (the "offline" status, the retained settings)
+     * would go to the NEW topic while the LWT and the old retained values stayed
+     * on the OLD one, leaving a room that is "online" forever with no node behind
+     * it. Pinning the room to the connection keeps teardown aimed at the topics
+     * this connection actually created.
+     */
+    var activeRoom: String = prefs.room
+        private set
+
+    private val room get() = activeRoom
     private val deviceConfigs = ConcurrentHashMap<String, DeviceConfig>()
 
     val isConnected: Boolean get() = client?.isConnected == true
 
     fun connect() {
         if (prefs.mqttHost.isBlank()) return
+        activeRoom = prefs.room
         try {
             val scheme = if (prefs.mqttTls) "ssl" else "tcp"
             val serverUri = "$scheme://${prefs.mqttHost}:${prefs.mqttPort}"
@@ -237,24 +253,65 @@ class MqttPublisher(
         }
     }
 
-    fun disconnect() {
+    /**
+     * Disconnects, announcing "offline" for [activeRoom] first.
+     *
+     * Pass [clearRetained] when this room is going away for good (a rename): the
+     * retained settings and the Home Assistant discovery config outlive the
+     * connection, so without an explicit wipe the old room keeps showing up in
+     * the companion and in Home Assistant with no node publishing to it.
+     */
+    fun disconnect(clearRetained: Boolean = false) {
+        val c = client
+        client = null
+        if (c == null) return
         try {
-            client?.let { c ->
-                if (c.isConnected) {
-                    val msg = MqttMessage("offline".toByteArray()).apply { qos = 1; isRetained = true }
-                    c.publish("espresense/rooms/$room/status", msg)
-                    c.disconnect()
-                }
+            if (!c.isConnected) {
                 c.close()
+                return
             }
+            val msg = MqttMessage("offline".toByteArray()).apply { qos = 1; isRetained = true }
+            c.publish("espresense/rooms/$activeRoom/status", msg)
+            if (clearRetained) clearRoom(c, activeRoom)
+            // close() has to wait for the DISCONNECT to complete: closing straight
+            // away can cut off the retained writes above before they reach the
+            // broker, which is exactly the ghost room this is meant to prevent.
+            c.disconnect(null, object : IMqttActionListener {
+                override fun onSuccess(asyncActionToken: IMqttToken?) {
+                    runCatching { c.close() }
+                }
+
+                override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                    Log.w(TAG, "disconnect failed", exception)
+                    runCatching { c.close() }
+                }
+            })
         } catch (e: Exception) {
             Log.w(TAG, "disconnect error", e)
-        } finally {
-            client = null
         }
+    }
+
+    /** Deletes every retained topic [onConnected] created for [slug]. */
+    private fun clearRoom(c: IMqttAsyncClient, slug: String) {
+        val topics = RETAINED_ROOM_KEYS.map { "espresense/rooms/$slug/$it" } +
+            "homeassistant/binary_sensor/espresense_$slug/config"
+        for (topic in topics) {
+            try {
+                // A zero-length retained payload is how MQTT deletes a retained message.
+                c.publish(topic, MqttMessage(ByteArray(0)).apply { qos = 1; isRetained = true })
+            } catch (e: Exception) {
+                Log.w(TAG, "clearRoom failed for $topic", e)
+            }
+        }
+        Log.i(TAG, "Cleared retained topics for old room $slug")
     }
 
     companion object {
         private const val TAG = "MqttPublisher"
+
+        /** Every retained room topic published by [onConnected], so a rename can clear them all. */
+        private val RETAINED_ROOM_KEYS = listOf(
+            "status", "name", "max_distance", "ref_rssi", "absorption", "rx_adj_rssi"
+        )
     }
 }

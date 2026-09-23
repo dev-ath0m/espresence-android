@@ -111,13 +111,19 @@ class ScannerService : Service() {
     private fun reconnectMqtt() {
         // Give the HTTP response time to flush before tearing down the old client.
         mainHandler.postDelayed({
-            mqtt?.disconnect()
+            val previous = mqtt
+            // On a rename the old room must be wiped while we are still connected to
+            // it, or it lingers in the companion as an "online" room with no node.
+            previous?.disconnect(clearRetained = previous.activeRoom != prefs.room)
             mqtt = MqttPublisher(prefs) { setting, value -> onRemoteSettingChanged(setting, value) }
             mqtt?.connect()
         }, 300)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Saving in the activity only writes prefs; an already-running service has to
+        // be told, otherwise a changed broker or room silently does not take effect.
+        if (intent?.action == ACTION_SETTINGS_CHANGED) reconnectMqtt()
         return START_STICKY
     }
 
@@ -338,6 +344,7 @@ class ScannerService : Service() {
         private const val SCAN_RESTART_INTERVAL_MS = 20 * 60_000L
         private const val LIVE_DEVICE_TIMEOUT_MS = 120_000L
         const val WEB_PORT = 8080
+        private const val ACTION_SETTINGS_CHANGED = "dev.espresense.node.SETTINGS_CHANGED"
 
         /**
          * Whether the service is actually alive, as opposed to [Prefs.serviceEnabled]
@@ -359,6 +366,19 @@ class ScannerService : Service() {
 
         fun start(context: Context) {
             val intent = Intent(context, ScannerService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        /** Tells a running service to pick up settings the activity just wrote. */
+        fun settingsChanged(context: Context) {
+            if (!isRunning) return
+            val intent = Intent(context, ScannerService::class.java).apply {
+                action = ACTION_SETTINGS_CHANGED
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
