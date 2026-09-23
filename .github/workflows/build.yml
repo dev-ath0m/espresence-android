@@ -56,11 +56,34 @@ jobs:
             printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
             echo "path=$RUNNER_TEMP/release.jks" >> "$GITHUB_OUTPUT"
             echo "signed=true" >> "$GITHUB_OUTPUT"
-            echo "Release keystore decoded."
+            echo "Release keystore decoded ($(stat -c%s "$RUNNER_TEMP/release.jks") bytes)."
           else
             echo "signed=false" >> "$GITHUB_OUTPUT"
             echo "::warning::KEYSTORE_B64 is not set - falling back to debug signing."
           fi
+
+      # Gradle reports bad signing credentials as an opaque task failure, so check
+      # them up front and say plainly what is wrong. A trailing newline picked up
+      # when pasting the secret is the usual culprit.
+      - name: Verify keystore credentials
+        if: steps.keystore.outputs.signed == 'true'
+        env:
+          KS: ${{ steps.keystore.outputs.path }}
+          PW: ${{ secrets.KEYSTORE_PASSWORD }}
+          ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          ALIAS="${ALIAS:-espresense-node}"
+          if ! keytool -list -keystore "$KS" -storepass "$PW" >/dev/null 2>&1; then
+            echo "::error::KEYSTORE_PASSWORD was rejected by the keystore (or KEYSTORE_B64 is truncated). A trailing newline or space in the secret is the usual cause."
+            exit 1
+          fi
+          if ! keytool -list -keystore "$KS" -storepass "$PW" -alias "$ALIAS" >/dev/null 2>&1; then
+            echo "::error::Alias '$ALIAS' is not in the keystore. Available private keys:"
+            keytool -list -keystore "$KS" -storepass "$PW" 2>/dev/null \
+              | grep PrivateKeyEntry | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          fi
+          echo "Keystore credentials OK (alias $ALIAS)."
 
       # versionCode must increase monotonically or Android rejects the install as
       # a downgrade, so it tracks the run number; versionName comes from the tag.
