@@ -48,10 +48,11 @@ class Prefs(context: Context) {
         set(value) = sp.edit().putFloat(KEY_ABSORPTION, value).apply()
 
     /**
-     * Per-node receiver correction in dB, added to every measured RSSI before the
-     * distance is computed (ESPresense's "rx_adj_rssi"). Receivers differ by tens of
-     * dB, so without it a node cannot be calibrated against a beacon whose reference
-     * power is fleet-wide (an iBeacon's broadcast Measured Power).
+     * Per-node receiver correction in dB, *subtracted* from every measured RSSI
+     * before the distance is computed (ESPresense's "rx_adj_rssi"), so a node that
+     * hears everything too loudly needs a positive value. Receivers differ by tens
+     * of dB, so without it a node cannot be calibrated against a beacon whose
+     * reference power is fleet-wide (an iBeacon's broadcast Measured Power).
      */
     var rxAdjRssi: Int
         get() = sp.getInt(KEY_RX_ADJ_RSSI, 0)

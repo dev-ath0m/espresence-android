@@ -195,7 +195,8 @@ class MqttPublisher(
             put("distance", distance)
             // ESPresense's ESP32 firmware reports the *adjusted* RSSI here, so that
             // distance stays reproducible from the payload; "rxAdj" exposes the offset.
-            put("rssi", beacon.rssi + rxAdjRssi)
+            // The firmware subtracts rx_adj_rssi - keep the same sign convention.
+            put("rssi", beacon.rssi - rxAdjRssi)
             put("rxAdj", rxAdjRssi)
             put("mac", beacon.mac)
             if (effectiveName != null) put("name", effectiveName)
