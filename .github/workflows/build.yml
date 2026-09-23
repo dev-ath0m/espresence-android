@@ -84,7 +84,17 @@ jobs:
           ESPRESENSE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           ESPRESENSE_VERSION_NAME: ${{ steps.version.outputs.name }}
           ESPRESENSE_VERSION_CODE: ${{ steps.version.outputs.code }}
-        run: ./gradlew assembleRelease --no-daemon
+        run: |
+          set -o pipefail
+          if ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee /tmp/build.log; then
+            exit 0
+          fi
+          # Promote the cause into annotations so the failure is diagnosable
+          # without downloading the log archive. Secrets stay masked by the runner.
+          grep -E "FAILURE:|What went wrong|Execution failed|Caused by|^> |error:" /tmp/build.log \
+            | head -n 15 \
+            | while IFS= read -r line; do echo "::error::$line"; done
+          exit 1
 
       # A silent fallback to debug signing would produce an APK that cannot update
       # installed nodes, so assert the expected signing identity explicitly.
