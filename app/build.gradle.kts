@@ -7,6 +7,12 @@ android {
     namespace = "dev.espresense.node"
     compileSdk = 34
 
+    // Blank counts as absent: GitHub Actions injects an *empty string* for a
+    // secret that was never defined, so a plain null-check would hand Gradle an
+    // empty key alias (or an unparseable version code) instead of falling back
+    // to the default.
+    fun env(name: String): String? = System.getenv(name)?.takeIf { it.isNotBlank() }
+
     defaultConfig {
         applicationId = "dev.espresense.node"
         minSdk = 26
@@ -14,8 +20,8 @@ android {
         // Releases override these from the environment. versionCode must increase
         // monotonically or Android refuses the install as a downgrade, so CI feeds
         // it the run number; versionName comes from the git tag.
-        versionCode = (System.getenv("ESPRESENSE_VERSION_CODE") ?: "1").toInt()
-        versionName = System.getenv("ESPRESENSE_VERSION_NAME") ?: "0.1.0"
+        versionCode = (env("ESPRESENSE_VERSION_CODE") ?: "1").toInt()
+        versionName = env("ESPRESENSE_VERSION_NAME") ?: "0.1.0"
     }
 
     // Release signing comes from the environment only: never keep a keystore or a
@@ -28,17 +34,16 @@ android {
     // build time. Losing this key means no in-place updates ever again; the app
     // must be uninstalled (losing its settings) before a differently-signed
     // build will install. Keep a backup outside the repo.
-    val keystorePath = System.getenv("ESPRESENSE_KEYSTORE")
-    val keystoreFile = keystorePath?.let { file(it) }?.takeIf { it.exists() }
+    val keystoreFile = env("ESPRESENSE_KEYSTORE")?.let { file(it) }?.takeIf { it.exists() }
 
     signingConfigs {
         if (keystoreFile != null) {
             create("release") {
                 storeFile = keystoreFile
-                storePassword = System.getenv("ESPRESENSE_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("ESPRESENSE_KEY_ALIAS") ?: "espresense-node"
-                keyPassword = System.getenv("ESPRESENSE_KEY_PASSWORD")
-                    ?: System.getenv("ESPRESENSE_KEYSTORE_PASSWORD")
+                storePassword = env("ESPRESENSE_KEYSTORE_PASSWORD")
+                keyAlias = env("ESPRESENSE_KEY_ALIAS") ?: "espresense-node"
+                keyPassword = env("ESPRESENSE_KEY_PASSWORD")
+                    ?: env("ESPRESENSE_KEYSTORE_PASSWORD")
             }
         }
     }
