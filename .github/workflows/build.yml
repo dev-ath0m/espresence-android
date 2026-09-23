@@ -3,7 +3,11 @@ name: Build APK
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
+
+permissions:
+  contents: write # required to publish a release from a tag
 
 jobs:
   build:
@@ -27,12 +31,84 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon
+      # The keystore only exists when the repository secret is set, so forks and
+      # pull requests (which never receive secrets) still build: the Gradle config
+      # falls back to debug signing when ESPRESENSE_KEYSTORE is unset or missing.
+      # The secret is passed through the environment rather than interpolated into
+      # the script, so it never lands on the shell command line.
+      - name: Decode signing keystore
+        id: keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "path=$RUNNER_TEMP/release.jks" >> "$GITHUB_OUTPUT"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Release keystore decoded."
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::KEYSTORE_B64 is not set - falling back to debug signing."
+          fi
+
+      # versionCode must increase monotonically or Android rejects the install as
+      # a downgrade, so it tracks the run number; versionName comes from the tag.
+      - name: Determine version
+        id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            NAME="${GITHUB_REF_NAME#v}"
+          else
+            NAME="0.1.0-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "Building version $NAME (versionCode $GITHUB_RUN_NUMBER)"
+
+      - name: Build release APK
+        env:
+          ESPRESENSE_KEYSTORE: ${{ steps.keystore.outputs.path }}
+          ESPRESENSE_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          ESPRESENSE_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          ESPRESENSE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          ESPRESENSE_VERSION_NAME: ${{ steps.version.outputs.name }}
+          ESPRESENSE_VERSION_CODE: ${{ steps.version.outputs.code }}
+        run: ./gradlew assembleRelease --no-daemon
+
+      # A silent fallback to debug signing would produce an APK that cannot update
+      # installed nodes, so assert the expected signing identity explicitly.
+      - name: Verify APK signature
+        env:
+          EXPECTED: 77173a12bdaa2c1c9966202e87c9dcf7c75f2ee634a598df8f7c03e01d31799b
+        run: |
+          APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+          APK=app/build/outputs/apk/release/app-release.apk
+          "$APKSIGNER" verify --print-certs "$APK"
+          if [ "${{ steps.keystore.outputs.signed }}" = "true" ]; then
+            "$APKSIGNER" verify --print-certs "$APK" | grep -qi "$EXPECTED" \
+              || { echo "::error::APK is not signed with the expected release key"; exit 1; }
+            echo "Signature matches the expected release key."
+          fi
+
+      - name: Rename APK
+        id: apk
+        run: |
+          DEST="espresense-node-${{ steps.version.outputs.name }}.apk"
+          mv app/build/outputs/apk/release/app-release.apk "$DEST"
+          echo "path=$DEST" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: espresense-node-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: espresense-node-apk
+          path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "${{ steps.apk.outputs.path }}" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

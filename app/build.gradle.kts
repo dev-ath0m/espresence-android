@@ -11,8 +11,11 @@ android {
         applicationId = "dev.espresense.node"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        // Releases override these from the environment. versionCode must increase
+        // monotonically or Android refuses the install as a downgrade, so CI feeds
+        // it the run number; versionName comes from the git tag.
+        versionCode = (System.getenv("ESPRESENSE_VERSION_CODE") ?: "1").toInt()
+        versionName = System.getenv("ESPRESENSE_VERSION_NAME") ?: "0.1.0"
     }
 
     // Release signing comes from the environment only: never keep a keystore or a
