@@ -47,6 +47,16 @@ class Prefs(context: Context) {
         get() = sp.getFloat(KEY_ABSORPTION, 2.7f)
         set(value) = sp.edit().putFloat(KEY_ABSORPTION, value).apply()
 
+    /**
+     * Per-node receiver correction in dB, added to every measured RSSI before the
+     * distance is computed (ESPresense's "rx_adj_rssi"). Receivers differ by tens of
+     * dB, so without it a node cannot be calibrated against a beacon whose reference
+     * power is fleet-wide (an iBeacon's broadcast Measured Power).
+     */
+    var rxAdjRssi: Int
+        get() = sp.getInt(KEY_RX_ADJ_RSSI, 0)
+        set(value) = sp.edit().putInt(KEY_RX_ADJ_RSSI, value).apply()
+
     /** Reports farther than this (meters) are dropped. */
     var maxDistance: Float
         get() = sp.getFloat(KEY_MAX_DISTANCE, 16.0f)
@@ -95,6 +105,7 @@ class Prefs(context: Context) {
         private const val KEY_ROOM = "room"
         private const val KEY_REF_RSSI = "ref_rssi"
         private const val KEY_ABSORPTION = "absorption"
+        private const val KEY_RX_ADJ_RSSI = "rx_adj_rssi"
         private const val KEY_MAX_DISTANCE = "max_distance"
         private const val KEY_SKIP_MS = "skip_ms"
         private const val KEY_SKIP_DISTANCE = "skip_distance"

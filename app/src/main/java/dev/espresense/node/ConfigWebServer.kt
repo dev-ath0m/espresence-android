@@ -154,6 +154,7 @@ class ConfigWebServer(
         params["room"]?.let { if (it.isNotBlank()) prefs.room = Prefs.sanitizeRoom(it) }
         params["ref_rssi"]?.toIntOrNull()?.let { prefs.refRssi = it }
         params["absorption"]?.toFloatOrNull()?.let { prefs.absorption = it }
+        params["rx_adj_rssi"]?.toIntOrNull()?.let { prefs.rxAdjRssi = it }
         params["max_distance"]?.toFloatOrNull()?.let { prefs.maxDistance = it }
         params["skip_ms"]?.toLongOrNull()?.let { prefs.skipMs = it }
         params["skip_distance"]?.toFloatOrNull()?.let { prefs.skipDistance = it }
@@ -289,6 +290,7 @@ fieldset{border:1px solid #ddd;border-radius:6px;margin-top:16px}
 <fieldset><legend>Calibration</legend>
 <label>ref_rssi<input type="number" name="ref_rssi" value="${prefs.refRssi}"></label>
 <label>absorption<input type="number" step="0.1" name="absorption" value="${prefs.absorption}"></label>
+<label>rx_adj_rssi (dB, this receiver's correction)<input type="number" name="rx_adj_rssi" value="${prefs.rxAdjRssi}"></label>
 <label>max_distance (m)<input type="number" step="0.1" name="max_distance" value="${prefs.maxDistance}"></label>
 <label>skip_ms<input type="number" name="skip_ms" value="${prefs.skipMs}"></label>
 <label>skip_distance (m)<input type="number" step="0.1" name="skip_distance" value="${prefs.skipDistance}"></label>

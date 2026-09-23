@@ -175,7 +175,8 @@ class ScannerService : Service() {
         // fallback, matching real ESPresense's DeviceConfig.calRssi behavior.
         val calRssi = mqtt?.resolveDevice(beacon.id)?.calRssi
         val refRssi = calRssi ?: beacon.measuredPower ?: prefs.refRssi
-        val distance = DistanceCalculator.estimate(beacon.rssi, refRssi, prefs.absorption)
+        val rxAdj = prefs.rxAdjRssi
+        val distance = DistanceCalculator.estimate(beacon.rssi, refRssi, prefs.absorption, rxAdj)
         if (distance < 0) return
 
         val now = SystemClock.elapsedRealtime()
@@ -192,7 +193,7 @@ class ScannerService : Service() {
         if (!shouldPublish) return
 
         lastPublished[beacon.id] = now to distance
-        mqtt?.publishDevice(beacon, distance)
+        mqtt?.publishDevice(beacon, distance, rxAdj)
     }
 
     private fun startScan() {
@@ -267,6 +268,7 @@ class ScannerService : Service() {
                 "max_distance" -> prefs.maxDistance = value.toFloat()
                 "ref_rssi" -> prefs.refRssi = value.toInt()
                 "absorption" -> prefs.absorption = value.toFloat()
+                "rx_adj_rssi" -> prefs.rxAdjRssi = value.toInt()
                 "skip_ms" -> prefs.skipMs = value.toLong()
                 "skip_distance" -> prefs.skipDistance = value.toFloat()
             }

@@ -130,6 +130,7 @@ fun SettingsScreen(
     var room by remember { mutableStateOf(prefs.room) }
     var refRssi by remember { mutableStateOf(prefs.refRssi.toString()) }
     var absorption by remember { mutableStateOf(prefs.absorption.toString()) }
+    var rxAdjRssi by remember { mutableStateOf(prefs.rxAdjRssi.toString()) }
     var maxDistance by remember { mutableStateOf(prefs.maxDistance.toString()) }
     var includeGeneric by remember { mutableStateOf(prefs.includeGenericDevices) }
     var discovery by remember { mutableStateOf(prefs.discoveryEnabled) }
@@ -144,6 +145,7 @@ fun SettingsScreen(
         prefs.room = Prefs.sanitizeRoom(room)
         prefs.refRssi = refRssi.toIntOrNull() ?: -65
         prefs.absorption = absorption.toFloatOrNull() ?: 2.7f
+        prefs.rxAdjRssi = rxAdjRssi.toIntOrNull() ?: 0
         prefs.maxDistance = maxDistance.toFloatOrNull() ?: 16.0f
         prefs.includeGenericDevices = includeGeneric
         prefs.discoveryEnabled = discovery
@@ -200,6 +202,12 @@ fun SettingsScreen(
             value = absorption, onValueChange = { absorption = it },
             label = { Text("absorption (path-loss exponent)") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = rxAdjRssi, onValueChange = { rxAdjRssi = it },
+            label = { Text("rx_adj_rssi (dB correction for this receiver)") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(

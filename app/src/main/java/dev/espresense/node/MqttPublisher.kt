@@ -109,6 +109,7 @@ class MqttPublisher(
             publishRetained("espresense/rooms/$room/max_distance", prefs.maxDistance.toString())
             publishRetained("espresense/rooms/$room/ref_rssi", prefs.refRssi.toString())
             publishRetained("espresense/rooms/$room/absorption", prefs.absorption.toString())
+            publishRetained("espresense/rooms/$room/rx_adj_rssi", prefs.rxAdjRssi.toString())
 
             if (prefs.discoveryEnabled) publishDiscovery()
         } catch (e: Exception) {
@@ -183,7 +184,7 @@ class MqttPublisher(
         publishRetained("espresense/settings/$fingerprint/config", json.toString())
     }
 
-    fun publishDevice(beacon: DetectedBeacon, distance: Double) {
+    fun publishDevice(beacon: DetectedBeacon, distance: Double, rxAdjRssi: Int = 0) {
         val c = client ?: return
         if (!c.isConnected) return
         val config = deviceConfigs[beacon.id]
@@ -192,7 +193,10 @@ class MqttPublisher(
         val json = JSONObject().apply {
             put("id", effectiveId)
             put("distance", distance)
-            put("rssi", beacon.rssi)
+            // ESPresense's ESP32 firmware reports the *adjusted* RSSI here, so that
+            // distance stays reproducible from the payload; "rxAdj" exposes the offset.
+            put("rssi", beacon.rssi + rxAdjRssi)
+            put("rxAdj", rxAdjRssi)
             put("mac", beacon.mac)
             if (effectiveName != null) put("name", effectiveName)
         }
