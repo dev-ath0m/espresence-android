@@ -183,8 +183,14 @@ object UpdateManager {
         // Android would reject a mismatched signature at install time anyway, but
         // checking first means a tampered or debug-signed APK never reaches the
         // installer and the failure is reported in terms of the signing key.
-        if (signer == null || installed == null || !signer.equals(installed, ignoreCase = true)) {
+        if (signer == null || installed == null) {
             target.delete()
+            Log.w(TAG, "Signer unreadable (download=$signer installed=$installed)")
+            throw IOException("Could not read the signing certificate of the download")
+        }
+        if (!signer.equals(installed, ignoreCase = true)) {
+            target.delete()
+            Log.w(TAG, "Signer mismatch: download=$signer installed=$installed")
             throw IOException(
                 "Signature check failed - the download is not signed with this app's release key"
             )
@@ -228,36 +234,39 @@ object UpdateManager {
 
     // ---- signature helpers ----
 
-    private fun signerDigest(context: Context, apk: File): String? {
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            PackageManager.GET_SIGNING_CERTIFICATES
+    /**
+     * GET_SIGNING_CERTIFICATES alone frequently leaves `signingInfo` null for an
+     * APK read off disk, which used to surface as "not signed with this app's
+     * release key" for a perfectly valid download. Ask for the legacy flag too and
+     * take whichever field the platform filled in.
+     */
+    private val signatureFlags: Int
+        @Suppress("DEPRECATION")
+        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES
         } else {
-            @Suppress("DEPRECATION")
             PackageManager.GET_SIGNATURES
         }
-        val info = context.packageManager.getPackageArchiveInfo(apk.absolutePath, flags) ?: return null
+
+    private fun signerDigest(context: Context, apk: File): String? {
+        val info = context.packageManager
+            .getPackageArchiveInfo(apk.absolutePath, signatureFlags) ?: return null
         return digestOf(info)
     }
 
-    private fun installedSignerDigest(context: Context): String? {
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            PackageManager.GET_SIGNING_CERTIFICATES
-        } else {
-            @Suppress("DEPRECATION")
-            PackageManager.GET_SIGNATURES
-        }
-        val info = context.packageManager.getPackageInfo(context.packageName, flags)
-        return digestOf(info)
-    }
+    private fun installedSignerDigest(context: Context): String? =
+        digestOf(context.packageManager.getPackageInfo(context.packageName, signatureFlags))
 
     private fun digestOf(info: android.content.pm.PackageInfo): String? {
         @Suppress("DEPRECATION")
         val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            info.signingInfo?.apkContentsSigners
+            info.signingInfo?.apkContentsSigners?.takeIf { it.isNotEmpty() }
+                ?: info.signingInfo?.signingCertificateHistory?.takeIf { it.isNotEmpty() }
+                ?: info.signatures
         } else {
             info.signatures
-        } ?: return null
-        val first = signatures.firstOrNull() ?: return null
+        }
+        val first = signatures?.firstOrNull() ?: return null
         val sha = MessageDigest.getInstance("SHA-256").digest(first.toByteArray())
         return sha.joinToString("") { "%02x".format(it) }
     }
