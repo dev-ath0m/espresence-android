@@ -30,6 +30,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
 
@@ -134,7 +136,18 @@ fun SettingsScreen(
     var maxDistance by remember { mutableStateOf(prefs.maxDistance.toString()) }
     var includeGeneric by remember { mutableStateOf(prefs.includeGenericDevices) }
     var discovery by remember { mutableStateOf(prefs.discoveryEnabled) }
-    var running by remember { mutableStateOf(prefs.serviceEnabled) }
+
+    // Reflect whether the service is genuinely alive, not merely enabled. Polling
+    // also catches the service dying on its own while this screen is open.
+    var running by remember { mutableStateOf(ScannerService.isRunning) }
+    var autoStart by remember { mutableStateOf(prefs.serviceEnabled) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            running = ScannerService.isRunning
+            autoStart = prefs.serviceEnabled
+            delay(1000)
+        }
+    }
 
     fun save() {
         prefs.mqttHost = host.trim()
@@ -250,12 +263,19 @@ fun SettingsScreen(
         Button(
             onClick = { onStop(); running = false },
             modifier = Modifier.fillMaxWidth(),
-            enabled = running
+            // Stay tappable when the service is dead but still flagged to auto-start,
+            // so the user can clear that flag (and retry a stop) without reinstalling.
+            enabled = running || autoStart
         ) { Text("Stop node") }
 
         Text(
-            if (running) "Status: node service enabled, will auto-start on boot."
-            else "Status: stopped.",
+            when {
+                running && autoStart -> "Status: running. Will auto-start on boot."
+                running -> "Status: running (auto-start on boot is off)."
+                autoStart -> "Status: NOT running, but enabled — the service was killed " +
+                    "(reinstall, force-stop or the system). Tap Start."
+                else -> "Status: stopped."
+            },
             style = MaterialTheme.typography.bodySmall
         )
 

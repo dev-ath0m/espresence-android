@@ -88,6 +88,7 @@ class ScannerService : Service() {
         startScan()
         mainHandler.postDelayed(telemetryRunnable, TELEMETRY_INTERVAL_MS)
         mainHandler.postDelayed(restartScanRunnable, SCAN_RESTART_INTERVAL_MS)
+        isRunning = true
     }
 
     private fun snapshotLiveDevices(): List<LiveDeviceInfo> {
@@ -123,6 +124,7 @@ class ScannerService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        isRunning = false
         stopScan()
         mainHandler.removeCallbacks(telemetryRunnable)
         mainHandler.removeCallbacks(restartScanRunnable)
@@ -336,6 +338,24 @@ class ScannerService : Service() {
         private const val SCAN_RESTART_INTERVAL_MS = 20 * 60_000L
         private const val LIVE_DEVICE_TIMEOUT_MS = 120_000L
         const val WEB_PORT = 8080
+
+        /**
+         * Whether the service is actually alive, as opposed to [Prefs.serviceEnabled]
+         * which only records that the user *wants* it running (and that it should
+         * auto-start on boot).
+         *
+         * The two diverge in practice: reinstalling the APK or force-stopping the app
+         * kills the service while the preference stays true, so a UI driven by the
+         * preference claims the node is healthy when nothing is scanning and the web
+         * UI on port [WEB_PORT] is dead.
+         *
+         * A process-wide flag is sufficient because the service and the activity share
+         * one process: anything that kills the service either runs [onDestroy] or tears
+         * down the process, and a fresh process starts with this back at false.
+         */
+        @Volatile
+        var isRunning: Boolean = false
+            private set
 
         fun start(context: Context) {
             val intent = Intent(context, ScannerService::class.java)

@@ -15,10 +15,42 @@ android {
         versionName = "0.1.0"
     }
 
+    // Release signing comes from the environment only: never keep a keystore or a
+    // password in the repo. Android treats the signing key as the identity of the
+    // app, so anyone holding it can build a package the device accepts as an
+    // update -- which is exactly what a self-update mechanism relies on.
+    //
+    // Locally: export ESPRESENSE_KEYSTORE=/keys/release.jks and the passwords.
+    // In CI: store the keystore base64-encoded as a *secret* and decode it at
+    // build time. Losing this key means no in-place updates ever again; the app
+    // must be uninstalled (losing its settings) before a differently-signed
+    // build will install. Keep a backup outside the repo.
+    val keystorePath = System.getenv("ESPRESENSE_KEYSTORE")
+    val keystoreFile = keystorePath?.let { file(it) }?.takeIf { it.exists() }
+
+    signingConfigs {
+        if (keystoreFile != null) {
+            create("release") {
+                storeFile = keystoreFile
+                storePassword = System.getenv("ESPRESENSE_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ESPRESENSE_KEY_ALIAS") ?: "espresense-node"
+                keyPassword = System.getenv("ESPRESENSE_KEY_PASSWORD")
+                    ?: System.getenv("ESPRESENSE_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Fall back to debug signing so a plain `assembleRelease` still works
+            // for anyone building without the key.
+            signingConfig = if (keystoreFile != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

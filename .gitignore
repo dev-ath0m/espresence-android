@@ -10,3 +10,10 @@
 app/build/
 *.hprof
 /.cli-tools/
+
+# Signing material must never be committed: the signing key is the app's identity
+# and the basis of update/OTA trust. Keep it outside the repo and in CI secrets.
+*.jks
+*.keystore
+keystore.properties
+release-password.txt
