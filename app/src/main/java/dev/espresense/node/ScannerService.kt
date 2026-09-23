@@ -193,7 +193,7 @@ class ScannerService : Service() {
         if (!shouldPublish) return
 
         lastPublished[beacon.id] = now to distance
-        mqtt?.publishDevice(beacon, distance, rxAdj)
+        mqtt?.publishDevice(beacon, distance, rxAdj, refRssi)
     }
 
     private fun startScan() {

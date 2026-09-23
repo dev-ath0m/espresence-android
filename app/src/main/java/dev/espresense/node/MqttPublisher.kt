@@ -184,7 +184,7 @@ class MqttPublisher(
         publishRetained("espresense/settings/$fingerprint/config", json.toString())
     }
 
-    fun publishDevice(beacon: DetectedBeacon, distance: Double, rxAdjRssi: Int = 0) {
+    fun publishDevice(beacon: DetectedBeacon, distance: Double, rxAdjRssi: Int = 0, refRssi: Int? = null) {
         val c = client ?: return
         if (!c.isConnected) return
         val config = deviceConfigs[beacon.id]
@@ -192,13 +192,20 @@ class MqttPublisher(
         val effectiveName = config?.name ?: beacon.name
         val json = JSONObject().apply {
             put("id", effectiveId)
-            put("distance", distance)
+            // Round like the firmware does; publishing full double precision
+            // produces 17-digit distances that differ in shape from every other node.
+            put("distance", Math.round(distance * 100.0) / 100.0)
             // ESPresense's ESP32 firmware reports the *adjusted* RSSI here, so that
             // distance stays reproducible from the payload; "rxAdj" exposes the offset.
             // The firmware subtracts rx_adj_rssi - keep the same sign convention.
             put("rssi", beacon.rssi - rxAdjRssi)
             put("rxAdj", rxAdjRssi)
-            put("mac", beacon.mac)
+            // The reference actually used for the distance, so the payload is
+            // self-consistent even when a device config overrides it.
+            if (refRssi != null) put("rssi@1m", refRssi)
+            // ESP32 and Pi nodes publish bare lowercase hex. Publishing the
+            // colon-separated uppercase form would look like a different device.
+            put("mac", beacon.mac.replace(":", "").lowercase())
             if (effectiveName != null) put("name", effectiveName)
         }
         try {
