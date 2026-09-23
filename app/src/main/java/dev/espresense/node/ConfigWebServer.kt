@@ -272,7 +272,8 @@ fieldset{border:1px solid #ddd;border-radius:6px;margin-top:16px}
 </style></head>
 <body>
 <h1>ESPresense Node</h1>
-<p>Room <b>${esc(prefs.room)}</b> &middot; MQTT <span class="status">$statusText</span></p>
+<p>Room <b>${esc(prefs.room)}</b> &middot; MQTT <span class="status">$statusText</span>
+&middot; version <b>${BuildConfig.VERSION_NAME}</b></p>
 
 <form method="post" action="/save">
 <fieldset><legend>MQTT broker</legend>
