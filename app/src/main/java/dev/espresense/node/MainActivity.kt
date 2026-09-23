@@ -34,13 +34,18 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -70,6 +75,7 @@ class MainActivity : ComponentActivity() {
                             prefs.serviceEnabled = false
                             ScannerService.stop(this)
                         },
+                        onRequestInstallPermission = { requestInstallPermission() },
                         onOpenWebUi = { openWebUi() }
                     )
                 }
@@ -112,6 +118,18 @@ class MainActivity : ComponentActivity() {
             startActivity(intent)
         }
     }
+
+    /**
+     * Opens the system page where the user allows this app to install packages.
+     * There is no runtime-permission dialog for this one; it is a settings toggle.
+     */
+    private fun requestInstallPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+            data = Uri.parse("package:$packageName")
+        }
+        startActivity(intent)
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -123,6 +141,7 @@ fun SettingsScreen(
     onStart: () -> Unit,
     onSettingsSaved: () -> Unit,
     onStop: () -> Unit,
+    onRequestInstallPermission: () -> Unit,
     onOpenWebUi: () -> Unit
 ) {
     val localIp = remember { NetUtils.getLocalIpAddress() }
@@ -147,6 +166,28 @@ fun SettingsScreen(
         while (true) {
             running = ScannerService.isRunning
             autoStart = prefs.serviceEnabled
+            delay(1000)
+        }
+    }
+
+    // ---- self-update ----
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var beta by remember { mutableStateOf(prefs.updateChannel == UpdateChannel.PRERELEASE) }
+    var autoCheck by remember { mutableStateOf(prefs.autoUpdateCheck) }
+    var available by remember { mutableStateOf<ReleaseInfo?>(null) }
+    var updateStatus by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var canInstall by remember { mutableStateOf(UpdateManager.canRequestInstall(context)) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            // The "install unknown apps" toggle is granted in system settings, so the
+            // only way to notice it flipped is to look again when we come back.
+            canInstall = UpdateManager.canRequestInstall(context)
+            InstallReceiver.lastResult?.let {
+                updateStatus = it
+                InstallReceiver.lastResult = null
+            }
             delay(1000)
         }
     }
@@ -293,6 +334,106 @@ fun SettingsScreen(
         )
         Button(onClick = onOpenWebUi, modifier = Modifier.fillMaxWidth(), enabled = running && localIp != null) {
             Text("Open web UI in browser")
+        }
+
+        Divider()
+        Text("Updates", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Installed: ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
+            style = MaterialTheme.typography.bodySmall
+        )
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(
+                checked = beta,
+                onCheckedChange = {
+                    beta = it
+                    prefs.updateChannel = if (it) UpdateChannel.PRERELEASE else UpdateChannel.STABLE
+                    available = null
+                    updateStatus = "Channel set to ${if (it) "pre-release" else "stable"}."
+                }
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("Install pre-releases (beta)")
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(
+                checked = autoCheck,
+                onCheckedChange = { autoCheck = it; prefs.autoUpdateCheck = it }
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("Check for updates daily")
+        }
+
+        Button(
+            onClick = {
+                scope.launch {
+                    busy = true
+                    updateStatus = "Checking…"
+                    available = null
+                    try {
+                        val release = withContext(Dispatchers.IO) {
+                            UpdateManager.fetchLatest(prefs.updateChannel)
+                        }
+                        prefs.lastUpdateCheckMs = System.currentTimeMillis()
+                        updateStatus = when {
+                            release == null -> "No release published on this channel yet."
+                            !UpdateManager.isNewer(release.version) ->
+                                "Up to date (latest is ${release.version})."
+                            else -> {
+                                available = release
+                                "Version ${release.version} is available" +
+                                    if (release.isPrerelease) " (pre-release)." else "."
+                            }
+                        }
+                    } catch (e: Exception) {
+                        updateStatus = "Check failed: ${e.message}"
+                    } finally {
+                        busy = false
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !busy
+        ) { Text("Check for updates") }
+
+        available?.let { release ->
+            if (!canInstall) {
+                Text(
+                    "Android needs permission to let this app install updates.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Button(onClick = onRequestInstallPermission, modifier = Modifier.fillMaxWidth()) {
+                    Text("Allow installing updates")
+                }
+            }
+            Button(
+                onClick = {
+                    scope.launch {
+                        busy = true
+                        try {
+                            val apk = withContext(Dispatchers.IO) {
+                                UpdateManager.download(context, release) { percent ->
+                                    updateStatus = "Downloading… $percent%"
+                                }
+                            }
+                            updateStatus = "Downloaded. Confirm the install prompt."
+                            withContext(Dispatchers.IO) { UpdateManager.install(context, apk) }
+                        } catch (e: Exception) {
+                            updateStatus = "Update failed: ${e.message}"
+                        } finally {
+                            busy = false
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !busy && canInstall
+            ) { Text("Download & install ${release.version}") }
+        }
+
+        if (updateStatus.isNotBlank()) {
+            Text(updateStatus, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

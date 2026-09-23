@@ -89,6 +89,21 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(KEY_SERVICE_ENABLED, false)
         set(value) = sp.edit().putBoolean(KEY_SERVICE_ENABLED, value).apply()
 
+    /** Which GitHub releases self-update will offer: stable only, or pre-releases too. */
+    var updateChannel: UpdateChannel
+        get() = UpdateChannel.fromKey(sp.getString(KEY_UPDATE_CHANNEL, null))
+        set(value) = sp.edit().putString(KEY_UPDATE_CHANNEL, value.name).apply()
+
+    /** Whether the node checks for a new release on its own (at most once a day). */
+    var autoUpdateCheck: Boolean
+        get() = sp.getBoolean(KEY_AUTO_UPDATE_CHECK, true)
+        set(value) = sp.edit().putBoolean(KEY_AUTO_UPDATE_CHECK, value).apply()
+
+    /** Wall-clock time of the last release check, to stay inside GitHub's rate limit. */
+    var lastUpdateCheckMs: Long
+        get() = sp.getLong(KEY_LAST_UPDATE_CHECK, 0L)
+        set(value) = sp.edit().putLong(KEY_LAST_UPDATE_CHECK, value).apply()
+
     fun isConfigured(): Boolean = mqttHost.isNotBlank() && room.isNotBlank()
 
     companion object {
@@ -114,5 +129,8 @@ class Prefs(context: Context) {
         private const val KEY_DISCOVERY = "discovery_enabled"
         private const val KEY_TELEMETRY = "telemetry_enabled"
         private const val KEY_SERVICE_ENABLED = "service_enabled"
+        private const val KEY_UPDATE_CHANNEL = "update_channel"
+        private const val KEY_AUTO_UPDATE_CHECK = "auto_update_check"
+        private const val KEY_LAST_UPDATE_CHECK = "last_update_check"
     }
 }

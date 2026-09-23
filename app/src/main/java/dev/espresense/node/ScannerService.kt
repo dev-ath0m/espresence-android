@@ -64,6 +64,13 @@ class ScannerService : Service() {
         }
     }
 
+    private val updateCheckRunnable = object : Runnable {
+        override fun run() {
+            maybeCheckForUpdate()
+            mainHandler.postDelayed(this, UPDATE_CHECK_INTERVAL_MS)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         prefs = Prefs(this)
@@ -88,7 +95,48 @@ class ScannerService : Service() {
         startScan()
         mainHandler.postDelayed(telemetryRunnable, TELEMETRY_INTERVAL_MS)
         mainHandler.postDelayed(restartScanRunnable, SCAN_RESTART_INTERVAL_MS)
+        mainHandler.postDelayed(updateCheckRunnable, FIRST_UPDATE_CHECK_DELAY_MS)
         isRunning = true
+    }
+
+    /**
+     * Looks for a newer release at most once a day and raises a notification.
+     * Installing still needs a tap, so this only ever informs - it never pulls
+     * an APK on its own.
+     */
+    private fun maybeCheckForUpdate() {
+        if (!prefs.autoUpdateCheck) return
+        val now = System.currentTimeMillis()
+        if (now - prefs.lastUpdateCheckMs < UpdateManager.MIN_CHECK_INTERVAL_MS) return
+        prefs.lastUpdateCheckMs = now
+        Thread {
+            try {
+                val release = UpdateManager.fetchLatest(prefs.updateChannel) ?: return@Thread
+                if (UpdateManager.isNewer(release.version)) {
+                    mainHandler.post { notifyUpdateAvailable(release) }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Update check failed", e)
+            }
+        }.start()
+    }
+
+    private fun notifyUpdateAvailable(release: ReleaseInfo) {
+        val open = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("ESPresense Node ${release.version} available")
+            .setContentText("Tap to install (installed: ${BuildConfig.VERSION_NAME})")
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        getSystemService(NotificationManager::class.java)
+            .notify(UPDATE_NOTIFICATION_ID, notification)
     }
 
     private fun snapshotLiveDevices(): List<LiveDeviceInfo> {
@@ -134,6 +182,7 @@ class ScannerService : Service() {
         stopScan()
         mainHandler.removeCallbacks(telemetryRunnable)
         mainHandler.removeCallbacks(restartScanRunnable)
+        mainHandler.removeCallbacks(updateCheckRunnable)
         webServer?.stop()
         mqtt?.disconnect()
         releaseWakeLock()
@@ -345,6 +394,11 @@ class ScannerService : Service() {
         private const val LIVE_DEVICE_TIMEOUT_MS = 120_000L
         const val WEB_PORT = 8080
         private const val ACTION_SETTINGS_CHANGED = "dev.espresense.node.SETTINGS_CHANGED"
+        private const val UPDATE_NOTIFICATION_ID = 43
+
+        /** Re-evaluated hourly; [UpdateManager.MIN_CHECK_INTERVAL_MS] decides if it really runs. */
+        private const val UPDATE_CHECK_INTERVAL_MS = 60 * 60_000L
+        private const val FIRST_UPDATE_CHECK_DELAY_MS = 60_000L
 
         /**
          * Whether the service is actually alive, as opposed to [Prefs.serviceEnabled]

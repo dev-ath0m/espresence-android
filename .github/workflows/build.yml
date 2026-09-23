@@ -158,6 +158,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A tag with a suffix (v0.2.0-beta.1) is a pre-release, so it only
+          # reaches nodes on the beta channel; GitHub keeps "latest" pointing at
+          # the newest plain vX.Y.Z for everyone else.
+          PRERELEASE=""
+          case "$GITHUB_REF_NAME" in
+            *-*) PRERELEASE="--prerelease" ;;
+          esac
+          echo "Publishing $GITHUB_REF_NAME ${PRERELEASE:-as a stable release}"
           gh release create "$GITHUB_REF_NAME" "${{ steps.apk.outputs.path }}" \
             --title "$GITHUB_REF_NAME" \
-            --generate-notes
+            --generate-notes $PRERELEASE
