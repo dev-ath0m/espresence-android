@@ -108,11 +108,13 @@ class ScannerService : Service() {
         if (!prefs.autoUpdateCheck) return
         val now = System.currentTimeMillis()
         if (now - prefs.lastUpdateCheckMs < UpdateManager.MIN_CHECK_INTERVAL_MS) return
-        prefs.lastUpdateCheckMs = now
         Thread {
             try {
-                val release = UpdateManager.fetchLatest(prefs.updateChannel) ?: return@Thread
-                if (UpdateManager.isNewer(release.version)) {
+                val release = UpdateManager.fetchLatest(prefs.updateChannel)
+                // Only stamp a SUCCESSFUL check, otherwise a brief network outage
+                // at the wrong minute silences updates for a whole day.
+                prefs.lastUpdateCheckMs = System.currentTimeMillis()
+                if (release != null && UpdateManager.isNewer(release.version)) {
                     mainHandler.post { notifyUpdateAvailable(release) }
                 }
             } catch (e: Exception) {
@@ -128,7 +130,7 @@ class ScannerService : Service() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val notification = NotificationCompat.Builder(this, UPDATE_CHANNEL_ID)
             .setContentTitle("ESPresense Node ${release.version} available")
             .setContentText("Tap to install (installed: ${BuildConfig.VERSION_NAME})")
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
@@ -365,8 +367,14 @@ class ScannerService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID, "ESPresense Node Service", NotificationManager.IMPORTANCE_LOW
             ).apply { description = "Keeps the BLE beacon scanner running" }
+            // Separate channel: the service one is IMPORTANCE_LOW so it stays quiet,
+            // which would bury an update behind the permanent "Scanning" notification.
+            val updates = NotificationChannel(
+                UPDATE_CHANNEL_ID, "App updates", NotificationManager.IMPORTANCE_DEFAULT
+            ).apply { description = "Tells you when a newer node release is available" }
             val nm = getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(channel)
+            nm.createNotificationChannel(updates)
         }
     }
 
@@ -388,6 +396,7 @@ class ScannerService : Service() {
     companion object {
         private const val TAG = "ScannerService"
         private const val CHANNEL_ID = "espresense_scanner"
+        private const val UPDATE_CHANNEL_ID = "espresense_updates"
         private const val NOTIFICATION_ID = 42
         private const val TELEMETRY_INTERVAL_MS = 60_000L
         private const val SCAN_RESTART_INTERVAL_MS = 20 * 60_000L

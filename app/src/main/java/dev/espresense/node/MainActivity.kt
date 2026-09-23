@@ -192,6 +192,43 @@ fun SettingsScreen(
         }
     }
 
+    // Checking on open means a published release shows up by just walking to the
+    // tablet, instead of only after someone remembers to press the button.
+    fun checkForUpdate(manual: Boolean) {
+        if (busy) return
+        scope.launch {
+            busy = true
+            if (manual) updateStatus = "Checking…"
+            available = null
+            try {
+                val release = withContext(Dispatchers.IO) {
+                    UpdateManager.fetchLatest(prefs.updateChannel)
+                }
+                prefs.lastUpdateCheckMs = System.currentTimeMillis()
+                updateStatus = when {
+                    release == null ->
+                        if (manual) "No release published on this channel yet." else ""
+                    !UpdateManager.isNewer(release.version) ->
+                        if (manual) "Up to date (latest is ${release.version})." else ""
+                    else -> {
+                        available = release
+                        "Version ${release.version} is available" +
+                            if (release.isPrerelease) " (pre-release)." else "."
+                    }
+                }
+            } catch (e: Exception) {
+                // A silent background check must not nag about a flaky network.
+                if (manual) updateStatus = "Check failed: ${e.message}"
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (prefs.autoUpdateCheck) checkForUpdate(manual = false)
+    }
+
     fun save() {
         prefs.mqttHost = host.trim()
         prefs.mqttPort = port.toIntOrNull() ?: 1883
@@ -367,33 +404,7 @@ fun SettingsScreen(
         }
 
         Button(
-            onClick = {
-                scope.launch {
-                    busy = true
-                    updateStatus = "Checking…"
-                    available = null
-                    try {
-                        val release = withContext(Dispatchers.IO) {
-                            UpdateManager.fetchLatest(prefs.updateChannel)
-                        }
-                        prefs.lastUpdateCheckMs = System.currentTimeMillis()
-                        updateStatus = when {
-                            release == null -> "No release published on this channel yet."
-                            !UpdateManager.isNewer(release.version) ->
-                                "Up to date (latest is ${release.version})."
-                            else -> {
-                                available = release
-                                "Version ${release.version} is available" +
-                                    if (release.isPrerelease) " (pre-release)." else "."
-                            }
-                        }
-                    } catch (e: Exception) {
-                        updateStatus = "Check failed: ${e.message}"
-                    } finally {
-                        busy = false
-                    }
-                }
-            },
+            onClick = { checkForUpdate(manual = true) },
             modifier = Modifier.fillMaxWidth(),
             enabled = !busy
         ) { Text("Check for updates") }
