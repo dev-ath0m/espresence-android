@@ -91,9 +91,11 @@ jobs:
           fi
           # Promote the cause into annotations so the failure is diagnosable
           # without downloading the log archive. Secrets stay masked by the runner.
-          grep -E "FAILURE:|What went wrong|Execution failed|Caused by|^> |error:" /tmp/build.log \
-            | head -n 15 \
-            | while IFS= read -r line; do echo "::error::$line"; done
+          { sed -n '/^FAILURE:/,$p' /tmp/build.log | grep -v '^> Task' | head -n 25
+            sed -n '/^FAILURE:/,$p' /tmp/build.log | grep -q . || tail -n 25 /tmp/build.log
+          } | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::$line"
+            done
           exit 1
 
       # A silent fallback to debug signing would produce an APK that cannot update
