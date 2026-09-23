@@ -8,13 +8,21 @@
     <!-- BLE scanning: legacy permissions for API < 31 -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
 
-    <!-- BLE scanning: API 31+ permissions. neverForLocation means we don't need location perms,
-         but also means we promise not to derive physical location from scan results. -->
+    <!-- Location permission is required on ALL API levels for this app. We must NOT declare
+         BLUETOOTH_SCAN with usesPermissionFlags="neverForLocation": when an app disavows
+         location, Android 12+ applies a "location denylist" to scan results and silently
+         strips the very advertisement types used for positioning - iBeacon (Apple 0x004C,
+         type 0x02 0x15) and Eddystone. The scan then still reports ordinary BLE devices,
+         which makes the failure look like a parsing bug rather than platform filtering.
+         A room-presence node inherently infers location, so it legitimately holds
+         ACCESS_FINE_LOCATION and must not disavow it. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- BLE scanning: API 31+ permissions. -->
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
-        android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 

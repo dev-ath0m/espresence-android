@@ -9,6 +9,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
@@ -207,8 +208,13 @@ class ScannerService : Service() {
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
+        // Passing a null filter list here silently returns zero scan results on some
+        // Qualcomm Snapdragon Bluetooth stacks in SCAN_MODE_LOW_LATENCY (scan registers
+        // fine, no errors, but onScanResult/onBatchScanResults never fire). An explicit,
+        // permissive (empty-builder) ScanFilter matches everything but avoids that bug.
+        val filters = listOf(ScanFilter.Builder().build())
         try {
-            bluetoothLeScanner?.startScan(null, settings, scanCallback)
+            bluetoothLeScanner?.startScan(filters, settings, scanCallback)
             scanning = true
             Log.i(TAG, "BLE scan started")
         } catch (e: SecurityException) {

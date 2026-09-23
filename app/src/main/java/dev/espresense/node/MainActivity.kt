@@ -78,9 +78,10 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             add(Manifest.permission.BLUETOOTH_SCAN)
             add(Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            add(Manifest.permission.ACCESS_FINE_LOCATION)
         }
+        // Required on every API level: without a granted location permission, Android 12+
+        // filters iBeacon/Eddystone advertisements out of scan results entirely.
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(Manifest.permission.POST_NOTIFICATIONS)
         }
