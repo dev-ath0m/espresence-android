@@ -123,10 +123,13 @@ jobs:
 
       # A silent fallback to debug signing would produce an APK that cannot update
       # installed nodes, so assert the expected signing identity explicitly.
+      # The expected fingerprint is derived from the committed public certificate,
+      # so signing/release-cert.pem is the single source of truth.
       - name: Verify APK signature
-        env:
-          EXPECTED: 77173a12bdaa2c1c9966202e87c9dcf7c75f2ee634a598df8f7c03e01d31799b
         run: |
+          EXPECTED=$(openssl x509 -in signing/release-cert.pem -noout -fingerprint -sha256 \
+                     | cut -d= -f2 | tr -d ': ' | tr 'A-F' 'a-f')
+          echo "Expected signer: $EXPECTED"
           APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
           APK=app/build/outputs/apk/release/app-release.apk
           "$APKSIGNER" verify --print-certs "$APK"
